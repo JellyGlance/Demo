@@ -1,0 +1,98 @@
+# JellyGlance live demo: a simulated media server, a year of generated history,
+# and a read-only gateway in front of a stock JellyGlance image.
+
+x-demo-env: &demo-env
+  DEMO_SEED: ${DEMO_SEED:-jellyglance-demo}
+  DEMO_USER: ${DEMO_USER:-demo}
+  DEMO_PASSWORD: ${DEMO_PASSWORD:?Set DEMO_PASSWORD in .env}
+  TZ: ${TZ:-Europe/London}
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: jellyglance
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --dbname=jellyglance --username=postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mock-jellyfin:
+    build: .
+    restart: unless-stopped
+    command: ["node", "src/mock-jellyfin.mjs"]
+    environment:
+      <<: *demo-env
+      PORT: "8096"
+      DEMO_MAX_SESSIONS: ${DEMO_MAX_SESSIONS:-4}
+
+  jellyglance:
+    image: ghcr.io/nerdy-technician/jellyglance:${JELLYGLANCE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      mock-jellyfin:
+        condition: service_started
+    environment:
+      TZ: ${TZ:-Europe/London}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_IP: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: jellyglance
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      JF_HOST: http://mock-jellyfin:8096
+      JF_API_KEY: demo-api-key
+      JF_SERVER_TYPE: jellyfin
+      JF_USE_WEBSOCKETS: "false"
+      JS_USER: ${DEMO_USER:-demo}
+      JS_PASSWORD: ${DEMO_PASSWORD}
+      JS_SKIP_FIRST_RUN: "true"
+      JS_AUTO_START_SYNC: "true"
+      # A full page load fetches ~200 small files; don't rate-limit visitors on assets.
+      STATIC_RATE_LIMIT_MAX: "5000"
+
+  seeder:
+    build: .
+    restart: unless-stopped
+    command: ["node", "src/seed.mjs", "--watch"]
+    depends_on:
+      db:
+        condition: service_healthy
+      jellyglance:
+        condition: service_started
+    environment:
+      <<: *demo-env
+      JG_URL: http://jellyglance:3000
+      POSTGRES_IP: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: jellyglance
+      DEMO_HISTORY_DAYS: ${DEMO_HISTORY_DAYS:-365}
+      DEMO_RESET_HOUR: ${DEMO_RESET_HOUR:-4}
+
+  gateway:
+    build: .
+    restart: unless-stopped
+    command: ["node", "src/gateway.mjs"]
+    depends_on:
+      - jellyglance
+    environment:
+      <<: *demo-env
+      PORT: "8080"
+      UPSTREAM: http://jellyglance:3000
+      DEMO_SITE_URL: ${DEMO_SITE_URL:-https://jellyglance.com}
+      GATEWAY_BEHIND_PROXY: ${GATEWAY_BEHIND_PROXY:-false}
+    ports:
+      - "${DEMO_PORT:-8080}:8080"
+
+volumes:
+  db-data:

@@ -1,0 +1,20 @@
+{
+  "name": "jellyglance-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A read-only JellyGlance demo with a simulated media server and generated history.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "mock": "node src/mock-jellyfin.mjs",
+    "seed": "node src/seed.mjs",
+    "gateway": "node src/gateway.mjs",
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
+  }
+}
