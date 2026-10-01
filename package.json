@@ -9,7 +9,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "mock": "node src/mock-jellyfin.mjs",
+    "services": "node src/services.mjs",
     "seed": "node src/seed.mjs",
     "gateway": "node src/gateway.mjs",
     "test": "node --test \"test/*.test.mjs\""

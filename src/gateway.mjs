@@ -9,6 +9,8 @@ const UPSTREAM = new URL(env("UPSTREAM", "http://jellyglance:3000"));
 const SITE_URL = env("DEMO_SITE_URL", "https://jellyglance.com");
 const DEMO_USER = env("DEMO_USER", "demo");
 const DEMO_PASSWORD = env("DEMO_PASSWORD", "");
+// TMDB's terms ask apps using its data to credit it.
+const TMDB_CREDIT = env("TMDB_API_KEY", "") ? `<span class="jg-demo-credit">Film &amp; TV data from TMDB</span>` : "";
 // Set when the demo sits behind another proxy (Caddy, Cloudflare…) that sends X-Forwarded-For.
 const BEHIND_PROXY = /^(1|true|yes)$/i.test(env("GATEWAY_BEHIND_PROXY", "false"));
 
@@ -56,8 +58,10 @@ const INJECT = `
     border:1px solid rgba(169,139,245,.45);box-shadow:0 8px 24px rgba(0,0,0,.35)}
   #jg-demo-badge b{color:#c4b5fd} #jg-demo-badge a{color:#ece8f6;text-decoration:underline}
   #jg-demo-badge button{all:unset;cursor:pointer;opacity:.7;padding:0 2px} #jg-demo-badge button:focus-visible{outline:2px solid #a98bf5}
+  #jg-demo-badge .jg-demo-credit{opacity:.65;font-weight:500}
+  @media (max-width:640px){#jg-demo-badge .jg-demo-credit{display:none}}
 </style>
-<div id="jg-demo-badge" role="note"><b>Live demo</b><span>Read-only · resets nightly</span><a href="${escapeHtml(SITE_URL)}" target="_blank" rel="noopener">Get JellyGlance</a><button type="button" aria-label="Hide demo notice" onclick="this.parentNode.remove()">×</button></div>
+<div id="jg-demo-badge" role="note"><b>Live demo</b><span>Read-only · resets every few hours</span>${TMDB_CREDIT}<a href="${escapeHtml(SITE_URL)}" target="_blank" rel="noopener">Get JellyGlance</a><button type="button" aria-label="Hide demo notice" onclick="this.parentNode.remove()">×</button></div>
 <script>
 (function () {
   try {

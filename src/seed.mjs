@@ -1,15 +1,16 @@
-// Seeds the demo database with a year of believable viewing history, then (with --watch)
-// rebuilds it every night so the demo always looks current and any live drift is cleared.
+// Seeds the demo: connects the fake integrations, writes a year of believable viewing history,
+// and (with --watch) rebuilds it every few hours so the demo always looks current.
 import pg from "pg";
-import { buildDataset, hashId, rng, SERVER_ID, constants } from "./dataset.mjs";
+import { hashId, rng, SERVER_ID, constants } from "./dataset.mjs";
 
 const { TICKS, DAY } = constants;
 const env = (name, fallback) => process.env[name] ?? fallback;
 const JG_URL = env("JG_URL", "http://jellyglance:3000").replace(/\/+$/, "");
 const HISTORY_DAYS = Number(env("DEMO_HISTORY_DAYS", 365));
-const RESET_HOUR = Number(env("DEMO_RESET_HOUR", 4));
+const RESET_EVERY_HOURS = Math.max(1, Number(env("DEMO_RESET_EVERY_HOURS", 4)));
+const SERVICES_URL = env("SERVICES_URL", "http://mock-jellyfin:8096").replace(/\/+$/, "");
 const WATCH = process.argv.includes("--watch");
-const data = buildDataset(env("DEMO_SEED", "jellyglance-demo"));
+let data = null;
 
 const pool = new pg.Pool({
   host: env("POSTGRES_IP", "db"),
@@ -51,11 +52,28 @@ async function libraryItemCount() {
   return rows[0].n;
 }
 
-// ---- history generation -----------------------------------------------------
+// ---- library from the demo services ---------------------------------------------
 
-const movies = data.items.filter((i) => i.Type === "Movie" && i.LibraryId === data.libraries[0].Id);
-const docs = data.items.filter((i) => i.Type === "Movie" && i.LibraryId === data.libraries[2].Id);
-const familyMovies = movies.filter((m) => m.Genres.some((g) => ["Animation", "Family", "Adventure"].includes(g)));
+// The services decide the library (TMDB or generated); fetch it so history uses the same IDs.
+export function useDataset(view) {
+  const byId = new Map(view.items.map((item) => [item.Id, item]));
+  const series = view.series.map((s) => ({ Id: s.Id, seasons: s.seasons.map((x) => ({ Id: x.Id, episodes: x.episodes.map((id) => byId.get(id)).filter(Boolean) })) }));
+  const movies = view.items.filter((i) => i.Type === "Movie" && i.LibraryId === view.libraries[0].Id);
+  data = {
+    seed: view.seed,
+    users: view.users,
+    series: series.filter((s) => s.seasons.some((x) => x.episodes.length)),
+    movies,
+    docs: view.items.filter((i) => i.Type === "Movie" && i.LibraryId === view.libraries[2].Id),
+    familyMovies: movies.filter((m) => (m.Genres || []).some((g) => ["Animation", "Family", "Adventure"].includes(g))),
+    expectedTitles: new Set(view.items.filter((i) => i.Type === "Movie").map((i) => i.Id)).size + view.series.length,
+  };
+  if (!data.familyMovies.length) data.familyMovies = movies;
+  if (!data.docs.length) data.docs = movies;
+  return data;
+}
+
+// ---- history generation -----------------------------------------------------
 
 function startHour(r, persona, weekend) {
   if (persona === "night-owl") return (22 + Math.floor(r() * 5)) % 24;
@@ -116,6 +134,7 @@ function playRow(r, user, item, endsAt, seconds) {
 
 export function generateHistory(now = new Date()) {
   const rows = [];
+  const { movies, docs, familyMovies } = data;
   for (const user of data.users) {
     const r = rng(`${data.seed}:history:${user.Id}`);
     // Each user works through a few shows in order, like a real watchlist.
@@ -206,12 +225,38 @@ async function refreshViews() {
   }
 }
 
+// The fake apps each answer on port 80 under their own hostname (see docker-compose.yml).
+const INTEGRATIONS = {
+  arrApps: [
+    { name: "Sonarr", slug: "sonarr", host: "sonarr", secret: "demo-sonarr-key" },
+    { name: "Radarr", slug: "radarr", host: "radarr", secret: "demo-radarr-key" },
+    { name: "Prowlarr", slug: "prowlarr", host: "prowlarr", secret: "demo-prowlarr-key" },
+    { name: "Bazarr", slug: "bazarr", host: "bazarr", secret: "demo-bazarr-key" },
+    { name: "Jellyseerr", slug: "jellyseerr", host: "jellyseerr", secret: "demo-seerr-key" },
+  ].map(({ host, secret, ...app }) => ({ ...app, instanceId: `${app.slug}-demo`, connected: true, values: { url: `http://${host}`, secret } })),
+  clients: [
+    { name: "qBittorrent", slug: "qbittorrent", protocol: "Torrent", instanceId: "qbittorrent-demo", connected: true, values: { url: "http://qbittorrent", username: "demo", secret: "demo-password" } },
+    { name: "SABnzbd", slug: "sabnzbd", protocol: "Usenet", instanceId: "sabnzbd-demo", connected: true, values: { url: "http://sabnzbd", secret: "demo-sab-key" } },
+  ],
+  thirdParty: [],
+};
+
+async function connectIntegrations() {
+  const token = await jellyglanceToken();
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const saved = await fetch(`${JG_URL}/api/integrations`, { method: "POST", headers, body: JSON.stringify(INTEGRATIONS) });
+  if (!saved.ok) throw new Error(`saving integrations failed (${saved.status})`);
+  await fetch(`${JG_URL}/api/integrations/test-all`, { method: "POST", headers, body: "{}" }).catch(() => {});
+  await fetch(`${JG_URL}/api/startTask?task=IntegrationSync`, { headers }).catch(() => {});
+  log("integrations connected: Sonarr, Radarr, Prowlarr, Bazarr, Jellyseerr, qBittorrent, SABnzbd");
+}
+
 async function reseed() {
   const rows = generateHistory();
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    // Clear everything, including plays recorded from the simulated live sessions, so each day starts clean.
+    // Clear everything, including plays recorded from the simulated live sessions, so each reset starts clean.
     await client.query("DELETE FROM jf_playback_activity");
     await client.query("DELETE FROM jf_activity_watchdog");
     await insertRows(client, rows);
@@ -223,10 +268,25 @@ async function reseed() {
     client.release();
   }
   await refreshViews();
+  await connectIntegrations().catch((error) => log(`integrations: ${error.message}`));
   log(`seeded ${rows.length} plays across ${data.users.length} users (${HISTORY_DAYS} days)`);
 }
 
+function nextReset(now = new Date()) {
+  const next = new Date(now);
+  next.setMinutes(0, 0, 0);
+  next.setHours(Math.floor(now.getHours() / RESET_EVERY_HOURS) * RESET_EVERY_HOURS + RESET_EVERY_HOURS);
+  return next;
+}
+
 async function main() {
+  await waitFor("demo services", async () => {
+    const response = await fetch(`${SERVICES_URL}/_demo/dataset`);
+    if (!response.ok) return false;
+    useDataset(await response.json());
+    return true;
+  });
+  log(`library: ${data.movies.length + data.docs.length} films, ${data.series.length} shows`);
   await waitFor("Postgres", async () => (await pool.query("SELECT 1")).rowCount === 1);
   await waitFor("JellyGlance setup", async () => {
     const response = await fetch(`${JG_URL}/auth/isConfigured`);
@@ -234,14 +294,15 @@ async function main() {
   });
   log("JellyGlance is configured; waiting for the library sync");
 
-  const expected = data.items.filter((i) => i.Type === "Movie" || i.Type === "Series").length;
+  // Allow a little slack so one odd title can never stall the demo.
+  const expected = Math.floor(data.expectedTitles * 0.95);
   try {
-    await waitFor("library sync", async () => (await libraryItemCount()) >= expected, { timeoutMs: 90_000 });
+    await waitFor("library sync", async () => (await libraryItemCount()) >= expected, { timeoutMs: 120_000 });
   } catch {
     log("library sync not finished, starting one");
     const token = await jellyglanceToken();
     await fetch(`${JG_URL}/sync/beginSync`, { headers: { Authorization: `Bearer ${token}` } });
-    await waitFor("library sync", async () => (await libraryItemCount()) >= expected, { timeoutMs: 600_000 });
+    await waitFor("library sync", async () => (await libraryItemCount()) >= expected, { timeoutMs: 900_000 });
   }
   log(`library synced (${await libraryItemCount()} titles)`);
 
@@ -252,12 +313,9 @@ async function main() {
   }
 
   for (;;) {
-    const now = new Date();
-    const next = new Date(now);
-    next.setHours(RESET_HOUR, 0, 0, 0);
-    if (next <= now) next.setDate(next.getDate() + 1);
-    log(`next reset at ${next.toISOString()}`);
-    await sleep(next.getTime() - now.getTime());
+    const next = nextReset();
+    log(`next reset at ${next.toISOString()} (every ${RESET_EVERY_HOURS}h)`);
+    await sleep(next.getTime() - Date.now());
     await reseed().catch((error) => log(`reset failed: ${error.message}`));
   }
 }
