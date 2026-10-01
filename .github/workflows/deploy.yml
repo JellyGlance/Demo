@@ -174,3 +174,9 @@ jobs:
           printf '%s' "$GHCR_TOKEN" | $SSH "docker login ghcr.io -u '${{ github.actor }}' --password-stdin >/dev/null"
           $SSH "cd '$DEMO_PATH' && if docker compose version >/dev/null 2>&1; then DC='docker compose'; else DC='docker-compose'; fi; \$DC pull --quiet && \$DC up -d --remove-orphans && docker image prune -f >/dev/null; docker logout ghcr.io >/dev/null"
           echo "Deployed ${{ needs.image.outputs.tag }} to ${DEMO_DOMAIN:-$DEMO_HOST}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show status
+        if: steps.settings.outputs.skip != 'true'
+        run: |
+          SSH="ssh -i $HOME/.ssh/demo -p $DEMO_SSH_PORT -o BatchMode=yes $DEMO_SSH_USER@$DEMO_HOST"
+          $SSH "cd '$DEMO_PATH' && if docker compose version >/dev/null 2>&1; then DC='docker compose'; else DC='docker-compose'; fi; \$DC ps; echo; \$DC logs --no-color --tail 400 jellyglance | grep -E 'BOOTSTRAP|Error|error' | tail -20; echo; \$DC logs --no-color --tail 15 mock-services seeder"
