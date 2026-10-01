@@ -100,6 +100,11 @@ jobs:
       - name: Check deploy settings
         id: settings
         run: |
+          # Tidy the domain: no scheme, path, spaces or trailing dot.
+          if [ -n "$DEMO_DOMAIN" ]; then
+            domain=$(printf '%s' "$DEMO_DOMAIN" | tr -d '[:space:]' | sed -E 's#^[a-zA-Z]+://##; s#/.*$##; s#\.+$##')
+            echo "DEMO_DOMAIN=$domain" >> "$GITHUB_ENV"
+          fi
           if [ -z "$DEMO_HOST" ] && [ -n "$HCLOUD_TOKEN" ]; then
             if DEMO_HOST=$(hcloud server ip "$SERVER_NAME" 2>/dev/null); then
               echo "DEMO_HOST=$DEMO_HOST" >> "$GITHUB_ENV"
