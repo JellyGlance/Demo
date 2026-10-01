@@ -51,15 +51,23 @@ Open <http://localhost:8080>. The first start takes a minute or two while the TM
 2. **Build image**: builds `ghcr.io/jellyglance/demo` for amd64 and arm64 and pushes it to GitHub Container Registry.
 3. **Deploy**: copies `docker-compose.yml` to your server over SSH, writes `.env` from repository secrets, then pulls and restarts.
 
-### One-time server setup
+### Hetzner Cloud (easiest)
 
-Any small Linux server with Docker and the Compose plugin works. Create a user that can run Docker, add the deploy public key to its `~/.ssh/authorized_keys`, and put a reverse proxy with HTTPS in front of port 8080, for example Caddy:
+`.github/workflows/hetzner.yml` creates the server for you:
 
-```
-demo.jellyglance.com {
-  reverse_proxy localhost:8080
-}
-```
+1. In the [Hetzner Cloud console](https://console.hetzner.cloud), create a project and an API token with read and write access. Save it as the `HCLOUD_TOKEN` secret.
+2. Make a deploy key with `ssh-keygen -t ed25519 -N "" -f demo_key` and save the contents of `demo_key` (the private half) as the `DEMO_SSH_KEY` secret.
+3. Add `POSTGRES_PASSWORD`, `JWT_SECRET` and `DEMO_PASSWORD` secrets (`openssl rand -hex 32` for each) and the `TMDB_API_KEY` variable.
+4. Run **Actions → Provision Hetzner server → Run workflow**. It creates a `cx23` server (about €4 a month) running Ubuntu 24.04 with Docker, a `deploy` user that can only log in with the key, and a firewall that only lets in SSH, HTTP and HTTPS. Then it starts a deploy. Running it again leaves an existing server alone.
+5. The run summary shows the server's IP address and a line for the optional `DEMO_SSH_KNOWN_HOSTS` secret. The demo is on `http://<ip>` straight away.
+
+For HTTPS on your own domain, add a DNS A record pointing at the IP, set the `DEMO_DOMAIN` variable (for example `demo.jellyglance.com`), and run **Test, build and deploy**. Caddy starts in front of the gateway and gets a certificate automatically.
+
+You don't need `DEMO_HOST` with Hetzner: each deploy looks the server up by name.
+
+### Any other server
+
+Any small Linux server with Docker and the Compose plugin works. Create a user that can run Docker, add the deploy public key to its `~/.ssh/authorized_keys`, and set `DEMO_HOST`. For HTTPS, set `DEMO_DOMAIN` and point it at the server (Caddy is included), or put your own reverse proxy in front of port 8080.
 
 ### Repository secrets
 
@@ -67,8 +75,9 @@ Add these under **Settings → Secrets and variables → Actions**:
 
 | Secret | Required | Purpose |
 | --- | --- | --- |
-| `DEMO_HOST` | yes | Server hostname or IP. Without it the deploy step is skipped. |
-| `DEMO_SSH_USER` | yes | SSH user on the server. |
+| `HCLOUD_TOKEN` | Hetzner only | Hetzner Cloud API token. Used to create the server and to find its IP on each deploy. |
+| `DEMO_HOST` | other servers | Server hostname or IP. Without it (or a Hetzner server) the deploy step is skipped. |
+| `DEMO_SSH_USER` | no | SSH user on the server. Defaults to `deploy`. |
 | `DEMO_SSH_KEY` | yes | Private key for that user. |
 | `DEMO_SSH_KNOWN_HOSTS` | recommended | Output of `ssh-keyscan your-server`, so the server's identity is checked. |
 | `DEMO_SSH_PORT` | no | Defaults to 22. |
@@ -80,6 +89,8 @@ And these under the **Variables** tab:
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `TMDB_API_KEY` | recommended | Real titles and artwork. (A secret with the same name also works.) |
+| `DEMO_DOMAIN` | no | Domain for the demo. When set, Caddy serves it over HTTPS. |
+| `DEMO_SERVER_NAME` | no | Name of the Hetzner server. Defaults to `jellyglance-demo`. |
 | `DEMO_EXTRA_ENV` | no | Extra settings for `.env`, one `KEY=value` per line, for example `GATEWAY_BEHIND_PROXY=true`. |
 
 Variables aren't masked in workflow logs. The workflow never prints the TMDB key, but use a secret instead if you'd rather it was hidden even from people who can edit the workflow.
@@ -100,7 +111,8 @@ Backups are switched off: the gateway blocks every backup route, and on each res
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `TMDB_API_KEY` | (none) | Real film and TV data. v3 API key or v4 read access token. |
-| `DEMO_PORT` | `8080` | Port the gateway listens on. |
+| `DEMO_PORT` | `8080` | Port the gateway listens on (the deploy sets `80` on Hetzner without a domain). |
+| `DEMO_DOMAIN` | (none) | With `COMPOSE_PROFILES=https`, Caddy serves this domain over HTTPS. |
 | `DEMO_RESET_EVERY_HOURS` | `4` | How often to rebuild history and integrations (on the hour, counted from midnight). |
 | `DEMO_HISTORY_DAYS` | `365` | How much history to generate. |
 | `DEMO_MAX_SESSIONS` | `4` | Peak number of simulated viewers in the evening. |

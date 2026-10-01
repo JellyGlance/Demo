@@ -1,0 +1,22 @@
+name: Install hcloud
+description: Installs the Hetzner Cloud CLI (pinned and checksum-verified)
+inputs:
+  version:
+    description: hcloud release
+    default: v1.69.0
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        cd "$RUNNER_TEMP"
+        base="https://github.com/hetznercloud/cli/releases/download/${VERSION}"
+        curl -fsSLO "$base/hcloud-linux-amd64.tar.gz"
+        curl -fsSLO "$base/checksums.txt"
+        grep ' hcloud-linux-amd64.tar.gz$' checksums.txt | sha256sum -c -
+        tar -xzf hcloud-linux-amd64.tar.gz hcloud
+        sudo install -m 0755 hcloud /usr/local/bin/hcloud
+        hcloud version

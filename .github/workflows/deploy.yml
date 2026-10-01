@@ -84,17 +84,31 @@ jobs:
     environment: demo
     env:
       DEMO_HOST: ${{ secrets.DEMO_HOST }}
-      DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+      DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER || 'deploy' }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+      SERVER_NAME: ${{ vars.DEMO_SERVER_NAME || 'jellyglance-demo' }}
+      DEMO_DOMAIN: ${{ vars.DEMO_DOMAIN }}
       DEMO_PATH: ${{ secrets.DEMO_PATH || '/opt/jellyglance-demo' }}
       DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # With a Hetzner token and no DEMO_HOST, look the server up by name.
+      - uses: ./.github/actions/hcloud
+        if: env.DEMO_HOST == '' && env.HCLOUD_TOKEN != ''
+
       - name: Check deploy settings
         id: settings
         run: |
-          if [ -z "$DEMO_HOST" ] || [ -z "$DEMO_SSH_USER" ]; then
-            echo "DEMO_HOST and DEMO_SSH_USER are not set, so there is nowhere to deploy. Skipping." >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$DEMO_HOST" ] && [ -n "$HCLOUD_TOKEN" ]; then
+            if DEMO_HOST=$(hcloud server ip "$SERVER_NAME" 2>/dev/null); then
+              echo "DEMO_HOST=$DEMO_HOST" >> "$GITHUB_ENV"
+            else
+              echo "::warning::No Hetzner server called $SERVER_NAME yet; run the Provision Hetzner server workflow first."
+            fi
+          fi
+          if [ -z "$DEMO_HOST" ]; then
+            echo "No DEMO_HOST and no Hetzner server, so there is nowhere to deploy. Skipping." >> "$GITHUB_STEP_SUMMARY"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -133,7 +147,14 @@ jobs:
             {
               printf 'POSTGRES_PASSWORD=%s\nJWT_SECRET=%s\nDEMO_PASSWORD=%s\nTMDB_API_KEY=%s\nDEMO_IMAGE_TAG=%s\n' \
                 "$POSTGRES_PASSWORD" "$JWT_SECRET" "$DEMO_PASSWORD" "$TMDB_API_KEY" "$IMAGE_TAG"
-              [ -n "$EXTRA_ENV" ] && printf '%s\n' "$EXTRA_ENV"
+              if [ -n "$DEMO_DOMAIN" ]; then
+                # Caddy answers on 80/443 with a certificate for the domain and proxies to the gateway.
+                printf 'DEMO_DOMAIN=%s\nCOMPOSE_PROFILES=https\nGATEWAY_BEHIND_PROXY=true\nDEMO_PORT=127.0.0.1:8080\n' "$DEMO_DOMAIN"
+              elif [ -n "$HCLOUD_TOKEN" ]; then
+                # No domain yet: serve plain HTTP on port 80.
+                printf 'DEMO_PORT=80\n'
+              fi
+              if [ -n "$EXTRA_ENV" ]; then printf '%s\n' "$EXTRA_ENV"; fi
             } | $SSH "umask 077 && cat > '$DEMO_PATH/.env'"
           else
             $SSH "cd '$DEMO_PATH' && test -f .env && sed -i '/^DEMO_IMAGE_TAG=/d' .env && echo 'DEMO_IMAGE_TAG=$IMAGE_TAG' >> .env"
@@ -147,4 +168,4 @@ jobs:
           SSH="ssh -i $HOME/.ssh/demo -p $DEMO_SSH_PORT -o BatchMode=yes $DEMO_SSH_USER@$DEMO_HOST"
           printf '%s' "$GHCR_TOKEN" | $SSH "docker login ghcr.io -u '${{ github.actor }}' --password-stdin >/dev/null"
           $SSH "cd '$DEMO_PATH' && if docker compose version >/dev/null 2>&1; then DC='docker compose'; else DC='docker-compose'; fi; \$DC pull --quiet && \$DC up -d --remove-orphans && docker image prune -f >/dev/null; docker logout ghcr.io >/dev/null"
-          echo "Deployed ${{ needs.image.outputs.tag }} to $DEMO_HOST" >> "$GITHUB_STEP_SUMMARY"
+          echo "Deployed ${{ needs.image.outputs.tag }} to ${DEMO_DOMAIN:-$DEMO_HOST}" >> "$GITHUB_STEP_SUMMARY"

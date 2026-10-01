@@ -1,0 +1,27 @@
+#cloud-config
+# First boot of the demo server: Docker, a locked-down deploy user, no password or root logins.
+package_update: true
+package_upgrade: true
+packages:
+  - docker.io
+  - docker-compose-v2
+  - fail2ban
+  - unattended-upgrades
+users:
+  - name: deploy
+    groups: [docker]
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - __DEPLOY_PUBLIC_KEY__
+ssh_pwauth: false
+disable_root: true
+write_files:
+  - path: /etc/ssh/sshd_config.d/60-demo.conf
+    content: |
+      PasswordAuthentication no
+      PermitRootLogin no
+runcmd:
+  - systemctl enable --now docker fail2ban unattended-upgrades
+  - systemctl reload ssh || systemctl reload sshd || true
+  - install -d -o deploy -g deploy -m 0750 /opt/jellyglance-demo

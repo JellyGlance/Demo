@@ -109,6 +109,24 @@ services:
     ports:
       - "${DEMO_PORT:-8080}:8080"
 
+  # Optional HTTPS front end (COMPOSE_PROFILES=https and DEMO_DOMAIN set). Gets a certificate automatically.
+  caddy:
+    image: caddy:2.11.4-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    command: ["caddy", "reverse-proxy", "--from", "${DEMO_DOMAIN:-localhost}", "--to", "gateway:8080"]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+
 volumes:
   db-data:
   mock-data:
+  caddy-data:
+  caddy-config:

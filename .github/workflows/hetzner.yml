@@ -1,0 +1,135 @@
+name: Provision Hetzner server
+
+# Creates the demo server on Hetzner Cloud if it doesn't exist yet (safe to run again),
+# then starts a deploy. Needs the HCLOUD_TOKEN and DEMO_SSH_KEY secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      server_type:
+        description: Hetzner server type (2 vCPU / 4 GB is plenty)
+        default: cx23
+      location:
+        description: Location (fsn1, nbg1, hel1, ash, hil, sin)
+        default: nbg1
+      image:
+        description: Operating system image
+        default: ubuntu-24.04
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo-deploy
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    name: Provision
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: demo
+    permissions:
+      contents: read
+      actions: write # start the deploy workflow afterwards
+    env:
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+      SERVER_NAME: ${{ vars.DEMO_SERVER_NAME || 'jellyglance-demo' }}
+      SERVER_TYPE: ${{ inputs.server_type }}
+      LOCATION: ${{ inputs.location }}
+      IMAGE: ${{ inputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check settings
+        env:
+          SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          if [ -z "$HCLOUD_TOKEN" ] || [ -z "$SSH_KEY" ]; then
+            echo "::error::Add the HCLOUD_TOKEN and DEMO_SSH_KEY repository secrets first."
+            exit 1
+          fi
+
+      - uses: ./.github/actions/hcloud
+
+      - name: Prepare SSH key
+        env:
+          SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/demo && chmod 600 ~/.ssh/demo
+          ssh-keygen -y -f ~/.ssh/demo > ~/.ssh/demo.pub
+
+      - name: Create SSH key, firewall and server if missing
+        id: server
+        run: |
+          set -euo pipefail
+          if ! hcloud server-type describe "$SERVER_TYPE" >/dev/null 2>&1; then
+            echo "::error::Unknown server type $SERVER_TYPE. Available types:"
+            hcloud server-type list -o columns=name,cores,memory,disk,architecture
+            exit 1
+          fi
+          if ! hcloud ssh-key describe "$SERVER_NAME-deploy" >/dev/null 2>&1; then
+            hcloud ssh-key create --name "$SERVER_NAME-deploy" --public-key-from-file ~/.ssh/demo.pub
+          fi
+          if ! hcloud firewall describe "$SERVER_NAME" >/dev/null 2>&1; then
+            cat > "$RUNNER_TEMP/rules.json" <<'RULES'
+          [
+            {"direction": "in", "protocol": "tcp", "port": "22", "source_ips": ["0.0.0.0/0", "::/0"], "description": "SSH"},
+            {"direction": "in", "protocol": "tcp", "port": "80", "source_ips": ["0.0.0.0/0", "::/0"], "description": "HTTP"},
+            {"direction": "in", "protocol": "tcp", "port": "443", "source_ips": ["0.0.0.0/0", "::/0"], "description": "HTTPS"},
+            {"direction": "in", "protocol": "udp", "port": "443", "source_ips": ["0.0.0.0/0", "::/0"], "description": "HTTP/3"}
+          ]
+          RULES
+            hcloud firewall create --name "$SERVER_NAME" --rules-file "$RUNNER_TEMP/rules.json"
+          fi
+          if hcloud server describe "$SERVER_NAME" >/dev/null 2>&1; then
+            echo "Server $SERVER_NAME already exists; leaving it as it is." >> "$GITHUB_STEP_SUMMARY"
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          else
+            sed "s|__DEPLOY_PUBLIC_KEY__|$(cat ~/.ssh/demo.pub)|" deploy/cloud-init.yml > "$RUNNER_TEMP/cloud-init.yml"
+            hcloud server create --name "$SERVER_NAME" --type "$SERVER_TYPE" --image "$IMAGE" --location "$LOCATION" \
+              --ssh-key "$SERVER_NAME-deploy" --firewall "$SERVER_NAME" --label app=jellyglance-demo \
+              --user-data-from-file "$RUNNER_TEMP/cloud-init.yml"
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          fi
+          ip=$(hcloud server ip "$SERVER_NAME")
+          echo "ip=$ip" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for first boot to finish
+        env:
+          IP: ${{ steps.server.outputs.ip }}
+        run: |
+          for _ in $(seq 1 60); do
+            if ssh -i ~/.ssh/demo -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 "deploy@$IP" "cloud-init status --wait >/dev/null && docker compose version"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::The server didn't finish setting up in 10 minutes."
+          exit 1
+
+      - name: Summary
+        env:
+          IP: ${{ steps.server.outputs.ip }}
+          DOMAIN: ${{ vars.DEMO_DOMAIN }}
+        run: |
+          {
+            echo "### Demo server ready"
+            echo ""
+            echo "- Name: \`$SERVER_NAME\`"
+            echo "- IPv4: \`$IP\`"
+            echo "- Known hosts line for the \`DEMO_SSH_KNOWN_HOSTS\` secret:"
+            echo '```'
+            ssh-keyscan -t ed25519 "$IP" 2>/dev/null
+            echo '```'
+            if [ -n "$DOMAIN" ]; then
+              echo "- Point an A record for \`$DOMAIN\` at \`$IP\`; Caddy gets the HTTPS certificate on the first deploy."
+            else
+              echo "- Set the \`DEMO_DOMAIN\` variable and point it at \`$IP\` for HTTPS; until then the demo is on http://$IP"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Start a deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy.yml --ref "${{ github.ref_name }}" -R "${{ github.repository }}"
