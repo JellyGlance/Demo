@@ -8,7 +8,7 @@ A live, read-only [JellyGlance](https://github.com/Nerdy-Technician/JellyGlance)
 | --- | --- |
 | `jellyglance` | The stock JellyGlance image, configured entirely from environment variables. |
 | `mock-services` | Stand-ins for the apps JellyGlance talks to, all built from one library (below). |
-| `seeder` | Writes about 3,500 plays covering the last year, connects the integrations, and rebuilds everything every 4 hours so the demo always looks current. |
+| `seeder` | Writes about 3,500 plays covering the last year, connects the integrations, switches off scheduled backups, and rebuilds everything every 4 hours so the demo always looks current. |
 | `gateway` | The public front door. Signs visitors in automatically, adds a small "Live demo" badge, and refuses anything that would change data. |
 | `db` | Postgres for JellyGlance. |
 
@@ -74,9 +74,15 @@ Add these under **Settings → Secrets and variables → Actions**:
 | `DEMO_SSH_PORT` | no | Defaults to 22. |
 | `DEMO_PATH` | no | Folder on the server. Defaults to `/opt/jellyglance-demo`. |
 | `POSTGRES_PASSWORD`, `JWT_SECRET`, `DEMO_PASSWORD` | yes* | Written to the server's `.env`. *Leave them out to manage `.env` on the server yourself. |
-| `TMDB_API_KEY` | recommended | Real titles and artwork. |
 
-Optional extra settings (for example `GATEWAY_BEHIND_PROXY=true`) go in a repository variable called `DEMO_EXTRA_ENV`, one `KEY=value` per line.
+And these under the **Variables** tab:
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `TMDB_API_KEY` | recommended | Real titles and artwork. (A secret with the same name also works.) |
+| `DEMO_EXTRA_ENV` | no | Extra settings for `.env`, one `KEY=value` per line, for example `GATEWAY_BEHIND_PROXY=true`. |
+
+Variables aren't masked in workflow logs. The workflow never prints the TMDB key, but use a secret instead if you'd rather it was hidden even from people who can edit the workflow.
 
 ## How read-only works
 
@@ -86,6 +92,8 @@ The gateway lets through page loads, reads, and the live-update socket. It refus
 - GET routes that start work, such as syncs, tasks, backups and utilities
 
 Even if something slipped through, the reset every 4 hours rebuilds the history and integrations from scratch.
+
+Backups are switched off: the gateway blocks every backup route, and on each reset the seeder pushes JellyGlance's scheduled backup out to once every ten years, so the demo never writes backup files.
 
 ## Settings
 

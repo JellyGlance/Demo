@@ -251,6 +251,25 @@ async function connectIntegrations() {
   log("integrations connected: Sonarr, Radarr, Prowlarr, Bazarr, Jellyseerr, qBittorrent, SABnzbd");
 }
 
+// The demo never needs backups (it rebuilds itself), so push JellyGlance's scheduled backup
+// out of reach. The settings endpoint reloads the scheduler, so this applies straight away.
+const BACKUP_INTERVAL_MINUTES = 10 * 365 * 24 * 60;
+
+async function disableBackups() {
+  const token = await jellyglanceToken();
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const response = await fetch(`${JG_URL}/api/setTaskSettings`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ taskname: "Backup", Interval: BACKUP_INTERVAL_MINUTES }),
+  });
+  // JellyGlance up to 1.2.11 saves and reloads the schedule, then errors while replying, so check
+  // the saved value rather than the status code.
+  const { rows } = await pool.query(`SELECT (settings->'Tasks'->'Backup'->>'Interval')::bigint AS interval FROM app_config WHERE "ID" = 1`);
+  if (Number(rows[0]?.interval) !== BACKUP_INTERVAL_MINUTES) throw new Error(`backup interval not saved (HTTP ${response.status})`);
+  log("scheduled backups disabled");
+}
+
 async function reseed() {
   const rows = generateHistory();
   const client = await pool.connect();
@@ -269,6 +288,7 @@ async function reseed() {
   }
   await refreshViews();
   await connectIntegrations().catch((error) => log(`integrations: ${error.message}`));
+  await disableBackups().catch((error) => log(`backups: ${error.message}`));
   log(`seeded ${rows.length} plays across ${data.users.length} users (${HISTORY_DAYS} days)`);
 }
 
