@@ -173,6 +173,15 @@ jobs:
           SSH="ssh -i $HOME/.ssh/demo -p $DEMO_SSH_PORT -o BatchMode=yes $DEMO_SSH_USER@$DEMO_HOST"
           printf '%s' "$GHCR_TOKEN" | $SSH "docker login ghcr.io -u '${{ github.actor }}' --password-stdin >/dev/null"
           $SSH "cd '$DEMO_PATH' && if docker compose version >/dev/null 2>&1; then DC='docker compose'; else DC='docker-compose'; fi; \$DC pull --quiet && \$DC up -d --remove-orphans && docker image prune -f >/dev/null; docker logout ghcr.io >/dev/null"
+          # JellyGlance sets itself up from the environment once, at startup. If that ran before the
+          # fake Jellyfin was ready, it is still on the setup screen; a restart runs it again.
+          $SSH "cd '$DEMO_PATH' && if docker compose version >/dev/null 2>&1; then DC='docker compose'; else DC='docker-compose'; fi; \
+            for _ in \$(seq 1 30); do \
+              state=\$(\$DC exec -T jellyglance node -e \"fetch('http://localhost:3000/auth/isConfigured').then(r=>r.json()).then(j=>console.log(j.state),()=>console.log('down'))\" 2>/dev/null); \
+              [ \"\$state\" != down ] && [ -n \"\$state\" ] && break; sleep 5; \
+            done; \
+            echo \"JellyGlance setup state: \$state\"; \
+            if [ \"\$state\" != 2 ]; then echo 'Not set up yet; restarting JellyGlance'; \$DC restart jellyglance; fi"
           echo "Deployed ${{ needs.image.outputs.tag }} to ${DEMO_DOMAIN:-$DEMO_HOST}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Show status
