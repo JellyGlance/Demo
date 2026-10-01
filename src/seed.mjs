@@ -270,6 +270,23 @@ async function disableBackups() {
   log("scheduled backups disabled");
 }
 
+// JellyGlance's JS_SKIP_FIRST_RUN marks the first-run wizard as done at startup, but up to 1.2.11
+// a settings save made straight after can write the old flag back, leaving visitors on the wizard.
+// Set it directly, and keep checking.
+async function skipFirstRunWizard() {
+  const { rowCount } = await pool.query(
+    `UPDATE app_config
+        SET settings = (COALESCE(settings::jsonb, '{}'::jsonb) || jsonb_build_object(
+          'firstRunExtrasPending', false,
+          'firstRunExtrasCompleted', true,
+          'firstRunExtrasCompletedAt', COALESCE(settings->>'firstRunExtrasCompletedAt', now()::text)))::json
+      WHERE "ID" = 1
+        AND (COALESCE((settings->>'firstRunExtrasPending')::boolean, false)
+             OR NOT COALESCE((settings->>'firstRunExtrasCompleted')::boolean, false))`
+  );
+  if (rowCount) log("first-run wizard marked done");
+}
+
 async function reseed() {
   const rows = generateHistory();
   const client = await pool.connect();
@@ -289,6 +306,7 @@ async function reseed() {
   await refreshViews();
   await connectIntegrations().catch((error) => log(`integrations: ${error.message}`));
   await disableBackups().catch((error) => log(`backups: ${error.message}`));
+  await skipFirstRunWizard().catch((error) => log(`first-run wizard: ${error.message}`));
   log(`seeded ${rows.length} plays across ${data.users.length} users (${HISTORY_DAYS} days)`);
 }
 
@@ -312,6 +330,7 @@ async function main() {
     const response = await fetch(`${JG_URL}/auth/isConfigured`);
     return response.ok && (await response.json()).state === 2;
   });
+  await skipFirstRunWizard();
   log("JellyGlance is configured; waiting for the library sync");
 
   // Allow a little slack so one odd title can never stall the demo.
@@ -332,6 +351,7 @@ async function main() {
     return;
   }
 
+  setInterval(() => skipFirstRunWizard().catch((error) => log(`first-run wizard: ${error.message}`)), 60_000);
   for (;;) {
     const next = nextReset();
     log(`next reset at ${next.toISOString()} (every ${RESET_EVERY_HOURS}h)`);
