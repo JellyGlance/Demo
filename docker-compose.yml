@@ -39,6 +39,13 @@ services:
       TMDB_API_KEY: ${TMDB_API_KEY:-}
     volumes:
       - mock-data:/data
+    # Healthy once the library is loaded (the first TMDB fetch takes a minute or two).
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8096/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 10m
     networks:
       default:
         aliases: [mock-jellyfin, sonarr, radarr, prowlarr, bazarr, jellyseerr, qbittorrent, sabnzbd]
@@ -49,8 +56,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # JellyGlance sets itself up from the environment once, at startup, so the fake
+      # Jellyfin has to be answering by then.
       mock-services:
-        condition: service_started
+        condition: service_healthy
     environment:
       TZ: ${TZ:-Europe/London}
       POSTGRES_USER: postgres
