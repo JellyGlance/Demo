@@ -1,0 +1,53 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Europe/London",
+  "platformCommit": "enabled",
+  "dependencyDashboard": true,
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 0,
+  "semanticCommits": "enabled",
+  "enabledManagers": ["npm", "dockerfile", "docker-compose", "github-actions"],
+  "packageRules": [
+    {
+      "matchManagers": ["npm"],
+      "addLabels": ["dependencies", "npm"]
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["dependencies"],
+      "groupName": "production-dependencies",
+      "semanticCommitType": "chore",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["devDependencies"],
+      "groupName": "development-dependencies",
+      "semanticCommitType": "chore",
+      "semanticCommitScope": "deps-dev"
+    },
+    {
+      "matchManagers": ["dockerfile", "docker-compose"],
+      "addLabels": ["dependencies", "docker"]
+    },
+    {
+      "description": "A new Postgres major cannot read the existing data volume on the demo server, so only take minor and patch updates.",
+      "matchManagers": ["docker-compose"],
+      "matchPackageNames": ["postgres"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "The demo's own image and JellyGlance itself are tagged by the deploy workflow, not pinned here.",
+      "matchManagers": ["docker-compose"],
+      "matchPackageNames": ["ghcr.io/jellyglance/demo", "ghcr.io/nerdy-technician/jellyglance"],
+      "enabled": false
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "addLabels": ["dependencies", "github-actions"],
+      "pinDigests": true
+    }
+  ]
+}

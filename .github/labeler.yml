@@ -1,0 +1,52 @@
+# Path-based PR labels (actions/labeler v5+)
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+
+src:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/**"
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "test/**"
+
+docker:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Dockerfile*"
+          - "docker-compose*.yml"
+          - ".dockerignore"
+
+deploy:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "deploy/**"
+          - ".github/actions/hcloud/**"
+          - ".github/workflows/deploy.yml"
+          - ".github/workflows/hetzner.yml"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "renovate.json"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "package.json"
+          - "package-lock.json"
+          - "Dockerfile*"
+          - "docker-compose*.yml"
+
+security:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*secret*"
+          - "**/security*"
+          - ".github/workflows/security.yml"
+          - ".github/workflows/security-alert-issues.yml"

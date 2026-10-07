@@ -1,0 +1,92 @@
+# Dependency updates via Renovate, authored by JellyGlance Security Bot.
+# Same setup as Nerdy-Technician/JellyGlance: update PRs are opened by our
+# GitHub App, so their checks get normal Actions secrets and trigger every
+# other workflow (PRs opened with GITHUB_TOKEN would not).
+#
+# Needs SECURITY_BOT_APP_ID / SECURITY_BOT_PRIVATE_KEY (repo or org secrets)
+# and the JellyGlance Security Bot app installed on this repo with read & write
+# on Contents, Pull requests, Issues (Dependency Dashboard) and Workflows (to
+# bump action versions). Until both secrets exist the job skips with a notice.
+name: Renovate (Security Bot)
+
+on:
+  schedule:
+    # 09:00 Europe/London during BST (cron is UTC).
+    - cron: "0 8 * * *"
+  # Ticking a checkbox on the Dependency Dashboard only edits the issue body;
+  # Renovate acts on it the next time it runs. Run straight away instead of
+  # waiting for the daily schedule.
+  issues:
+    types: [edited]
+  workflow_dispatch:
+    inputs:
+      log-level:
+        description: Renovate log level
+        required: false
+        default: info
+        type: choice
+        options: [info, debug]
+
+permissions:
+  contents: read
+
+jobs:
+  renovate:
+    # For issue edits, only react to a person ticking a box on the dashboard.
+    # Renovate rewrites the dashboard itself on every run; ignoring bot edits
+    # stops it from re-triggering itself in a loop.
+    if: >-
+      github.event_name != 'issues' || (
+        github.event.issue.title == 'Dependency Dashboard' &&
+        github.event.issue.user.type == 'Bot' &&
+        github.event.sender.type != 'Bot' &&
+        contains(github.event.issue.body, '- [x] ')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Job-level so skipped runs (edits to other issues) never take the slot.
+    concurrency:
+      group: renovate
+      cancel-in-progress: false
+    env:
+      HAS_SECURITY_BOT: ${{ secrets.SECURITY_BOT_APP_ID != '' && secrets.SECURITY_BOT_PRIVATE_KEY != '' }}
+    steps:
+      - name: Security Bot not configured
+        if: env.HAS_SECURITY_BOT != 'true'
+        run: |
+          echo "::notice::SECURITY_BOT_APP_ID / SECURITY_BOT_PRIVATE_KEY are not set; skipping Renovate until the JellyGlance Security Bot is installed and its secrets are added."
+
+      - name: Checkout
+        if: env.HAS_SECURITY_BOT == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Mint JellyGlance Security Bot token
+        id: bot
+        if: env.HAS_SECURITY_BOT == 'true'
+        uses: ./.github/actions/mint-bot-token
+        with:
+          bot-name: JellyGlance Security Bot
+          app-id: ${{ secrets.SECURITY_BOT_APP_ID }}
+          private-key: ${{ secrets.SECURITY_BOT_PRIVATE_KEY }}
+
+      # Secrets are set but the token could not be minted (wrong key, app not
+      # installed here). Never fall back to github-actions[bot]: PRs opened with
+      # GITHUB_TOKEN don't trigger other workflows, which defeats the point.
+      - name: Require Security Bot token
+        if: env.HAS_SECURITY_BOT == 'true' && steps.bot.outputs.using-bot != 'true'
+        run: |
+          echo "::error::JellyGlance Security Bot secrets are set but no token could be minted. Check the app is installed on this repository and the private key matches."
+          exit 1
+
+      - name: Run Renovate
+        if: env.HAS_SECURITY_BOT == 'true'
+        uses: renovatebot/github-action@230ce922b08968d0a4f6f70f295601daff09ef1d # v46.3.7
+        with:
+          token: ${{ steps.bot.outputs.token }}
+        env:
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
+          RENOVATE_PLATFORM_COMMIT: "enabled"
+          RENOVATE_ONBOARDING: "false"
+          LOG_LEVEL: ${{ inputs.log-level || 'info' }}
