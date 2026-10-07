@@ -1,0 +1,61 @@
+name: Notify / Discord Pull Requests
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - closed
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  DISCORD_REPO_LABEL: Demo
+
+jobs:
+  notify:
+    name: Post pull request update to Discord
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      # Closed PRs have no merge ref any more, so read the script from the base branch.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+          ref: ${{ github.event.action == 'closed' && github.event.pull_request.base.ref || '' }}
+
+      - name: Post pull request notification
+        env:
+          DISCORD_EVENT_TYPE: pull_request
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_PR_WEBHOOK }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_AVATAR: ${{ github.event.pull_request.user.avatar_url }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ', ') }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_ACTION: ${{ github.event.action }}
+          PR_MERGED: ${{ github.event.pull_request.merged }}
+          PR_MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
+          PR_ACTOR: ${{ github.actor }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_COMMITS: ${{ github.event.pull_request.commits }}
+          PR_ADDITIONS: ${{ github.event.pull_request.additions }}
+          PR_DELETIONS: ${{ github.event.pull_request.deletions }}
+        run: |
+          if [ -z "${DISCORD_WEBHOOK_URL}" ]; then
+            echo "::warning::DISCORD_PR_WEBHOOK is not set. Skipping pull request notification."
+            exit 0
+          fi
+          node .github/scripts/discord-notify.mjs || echo "::warning::Discord pull request notification failed."

@@ -1,0 +1,80 @@
+name: Notify / Discord Deploy
+
+# Post to Discord when the live demo is deployed from main, or when the
+# "Test, build and deploy" pipeline fails on main. Only reads the finished
+# run (jobs and steps); it never changes or re-runs the deploy.
+on:
+  workflow_run:
+    workflows:
+      - Test, build and deploy
+    types:
+      - completed
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  DISCORD_REPO_LABEL: Demo
+
+jobs:
+  notify:
+    name: Post deploy result to Discord
+    if: >-
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.event != 'pull_request' &&
+      contains(fromJSON('["success","failure","timed_out","startup_failure"]'), github.event.workflow_run.conclusion)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Post deploy notification
+        env:
+          DISCORD_EVENT_TYPE: workflow
+          WORKFLOW_KIND: deploy
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_DEPLOY_WEBHOOK || secrets.DISCORD_BUILD_WEBHOOK || secrets.DISCORD_CI_WEBHOOK }}
+          # Scheduled daily redeploys are quiet when they succeed; set this
+          # repository variable to "true" to announce them too.
+          NOTIFY_SCHEDULED: ${{ vars.DISCORD_NOTIFY_SCHEDULED_DEPLOYS }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          DEMO_DOMAIN: ${{ vars.DEMO_DOMAIN }}
+          WORKFLOW_NAME: Demo deploy
+          WORKFLOW_URL: ${{ github.event.workflow_run.html_url }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          TRIGGER_EVENT: ${{ github.event.workflow_run.event }}
+          DISPLAY_TITLE: ${{ github.event.workflow_run.display_title }}
+          ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          if [ -z "${DISCORD_WEBHOOK_URL}" ]; then
+            echo "::warning::DISCORD_DEPLOY_WEBHOOK (or DISCORD_BUILD_WEBHOOK / DISCORD_CI_WEBHOOK) is not set. Skipping."
+            exit 0
+          fi
+          if [ "${CONCLUSION}" = "success" ]; then
+            # The pipeline also succeeds when there is nowhere to deploy; only
+            # announce runs where the "Pull and restart" step really ran.
+            deployed="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/jobs" \
+              --jq '[.jobs[] | select(.name == "Deploy") | .steps[] | select(.name == "Pull and restart") | .conclusion] | first // ""' 2>/dev/null || true)"
+            if [ "${deployed}" != "success" ]; then
+              echo "Deploy step did not run (${deployed:-not found}); nothing to announce."
+              exit 0
+            fi
+            if [ "${TRIGGER_EVENT}" = "schedule" ] && [ "${NOTIFY_SCHEDULED}" != "true" ]; then
+              echo "Scheduled redeploy succeeded; staying quiet."
+              exit 0
+            fi
+          fi
+          if [ -n "${DEMO_DOMAIN}" ]; then
+            domain="$(printf '%s' "${DEMO_DOMAIN}" | tr -d '[:space:]' | sed -E 's#^[a-zA-Z]+://##; s#/.*$##; s#\.+$##')"
+            export DEPLOY_TARGET="https://${domain}"
+          fi
+          node .github/scripts/discord-notify.mjs || echo "::warning::Discord deploy notification failed."

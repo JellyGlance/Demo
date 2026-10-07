@@ -1,0 +1,184 @@
+name: Welcome
+
+# Branded JellyGlance Bot welcome on every new pull request and issue.
+# pull_request_target runs this file from main and never checks out PR code,
+# so it is safe for fork PRs; it only reads the PR and posts one comment.
+on:
+  pull_request_target:
+    types: [opened]
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  welcome:
+    name: Welcome
+    # Skip bot authors (Renovate PRs, Dependency Dashboard, security alert issues).
+    if: >-
+      (github.event.pull_request.user.type || github.event.issue.user.type) != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (main, for the bot token action)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: .github/actions
+
+      - name: Mint JellyGlance Check Bot token
+        id: bot
+        uses: ./.github/actions/mint-bot-token
+        with:
+          bot-name: JellyGlance Check Bot
+          app-id: ${{ secrets.CHECK_BOT_APP_ID }}
+          private-key: ${{ secrets.CHECK_BOT_PRIVATE_KEY }}
+
+      - name: Post welcome
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ACTIONS_TOKEN: ${{ github.token }}
+        with:
+          github-token: ${{ steps.bot.outputs.token }}
+          script: |
+            const MARKER = '<!-- jellyglance-welcome -->';
+            const MAINTAINER = 'Nerdy-Technician';
+            const { owner, repo } = context.repo;
+            const repoUrl = `https://github.com/${owner}/${repo}`;
+            // Logo lives in the main JellyGlance repository.
+            const raw = 'https://raw.githubusercontent.com/Nerdy-Technician/JellyGlance/main/.github/assets';
+            const appRepo = 'https://github.com/Nerdy-Technician/JellyGlance';
+            const pr = context.payload.pull_request;
+            const issue = context.payload.issue;
+            const target = pr || issue;
+            const number = target.number;
+            const author = target.user.login;
+            const isMaintainer = author === MAINTAINER;
+
+            // Never post twice (e.g. a re-run).
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: number, per_page: 100,
+            });
+            if (comments.some((c) => (c.body || '').includes(MARKER))) {
+              core.info(`Welcome already posted on #${number}`);
+              return;
+            }
+
+            // For PRs, also mention whoever committed to the head branch.
+            const people = [author];
+            if (pr) {
+              try {
+                const commits = await github.paginate(github.rest.pulls.listCommits, {
+                  owner, repo, pull_number: number, per_page: 100,
+                });
+                for (const c of commits) {
+                  for (const u of [c.author, c.committer]) {
+                    if (!u || !u.login || u.type === 'Bot' || u.login === 'web-flow') continue;
+                    if (!people.includes(u.login)) people.push(u.login);
+                  }
+                }
+              } catch (error) {
+                core.info(`Could not list commits: ${error.message}`);
+              }
+            }
+            const mention = (list) => list.map((p) => `@${p}`).join(', ');
+            const cc = people.slice(1);
+
+            const header = [
+              MARKER,
+              '<p align="center">',
+              `  <a href="https://jellyglance.com/"><img src="${raw}/full-logo-transparent.png" alt="JellyGlance" width="280"></a>`,
+              '</p>',
+              '',
+            ];
+            const footer = [
+              '',
+              '---',
+              `<sub>🪼 <b>JellyGlance Bot</b> · <a href="https://jellyglance.com/">jellyglance.com</a> · <a href="${appRepo}/blob/main/SECURITY.md">Security policy</a> · <a href="${appRepo}">JellyGlance</a></sub>`,
+            ];
+
+            let body;
+            if (pr) {
+              const branch = `\`${pr.head.label}\` → \`${pr.base.ref}\``;
+              const review = isMaintainer
+                ? 'Self-review: merge once every check is green.'
+                : `@${MAINTAINER} has been assigned and will review it.`;
+              body = [
+                ...header,
+                `### 👋 Hey @${author}, thanks for the pull request!`,
+                '',
+                `> **JellyGlance Bot** here. I've picked up **#${number}** (${branch}).${cc.length ? ` Commits on this branch are from ${mention(people)}.` : ''}`,
+                '',
+                '#### 🧭 What happens next',
+                '',
+                '| | |',
+                '| :-- | :-- |',
+                '| 🤖 **Checks** | **Tests** (`npm test` + compose config), **workflow lint** and **CodeQL · Trivy · OSV** run on every push. Merging to `main` redeploys the live demo. |',
+                '| 🏷️ **Labels** | Path and size labels are added automatically. |',
+                `| 👀 **Review** | ${review} |`,
+                '',
+                '<details>',
+                '<summary><b>✅ Before you ask for review</b></summary>',
+                '',
+                '- [ ] Title follows Conventional Commits (`feat:`, `fix:`, `chore:` …)',
+                '- [ ] One focused change per PR; the description explains the *why*',
+                '- [ ] `npm test` passes and `docker compose config` is happy',
+                '- [ ] Demo stays read-only: no real credentials, hosts or personal data in fixtures',
+                '- [ ] No secrets, tokens or personal data in code, logs or screenshots',
+                '',
+                '</details>',
+                '',
+                `📚 [Docs](https://jellyglance.com/) · 🧩 [Integrations](https://jellyglance.com/integrations) · 🗺️ [Roadmap](https://jellyglance.com/roadmap) · 🐛 [Issues](${repoUrl}/issues)`,
+                ...footer,
+              ];
+            } else {
+              const triage = isMaintainer
+                ? 'Logged for triage.'
+                : `@${MAINTAINER} has been assigned and will triage it.`;
+              body = [
+                ...header,
+                `### 👋 Hey @${author}, thanks for opening an issue!`,
+                '',
+                `> **JellyGlance Bot** here. **#${number}** is logged and on the radar for the live demo.`,
+                '',
+                '#### 🧭 What happens next',
+                '',
+                '| | |',
+                '| :-- | :-- |',
+                `| 🏷️ **Triage** | ${triage} |`,
+                '| 🔎 **Details** | Tell us which demo page you were on, what you expected and what happened (a screenshot helps). App bugs belong in the [JellyGlance repo](' + appRepo + '/issues). |',
+                '| 🔔 **Updates** | You\'ll be notified here when there\'s progress or a question. |',
+                '',
+                `> [!IMPORTANT]`,
+                `> Found a security vulnerability? Please don't post details publicly. Follow the [security policy](${appRepo}/blob/main/SECURITY.md) instead.`,
+                '',
+                `📚 [Docs](https://jellyglance.com/) · 🧩 [Integrations](https://jellyglance.com/integrations) · 🗺️ [Roadmap](https://jellyglance.com/roadmap) · 🚀 [Releases](${appRepo}/releases)`,
+                ...footer,
+              ];
+            }
+
+            // Issues: make sure the maintainer is assigned (PRs are assigned by PR Labeler).
+            if (issue && !(issue.assignees || []).some((a) => a.login === MAINTAINER)) {
+              try {
+                await getOctokit(process.env.ACTIONS_TOKEN).rest.issues.addAssignees({
+                  owner, repo, issue_number: number, assignees: [MAINTAINER],
+                });
+              } catch (error) {
+                core.warning(`Could not assign ${MAINTAINER} (${error.status}): ${error.message}`);
+              }
+            }
+
+            const payload = { owner, repo, issue_number: number, body: body.join('\n') };
+            try {
+              await github.rest.issues.createComment(payload);
+            } catch (error) {
+              // Bot app without access to this kind of item: post as github-actions[bot].
+              if (![403, 404].includes(error.status)) throw error;
+              core.warning(`Check Bot could not comment (${error.status}); using github-actions[bot].`);
+              await getOctokit(process.env.ACTIONS_TOKEN).rest.issues.createComment(payload);
+            }
+            core.info(`Welcomed ${mention(people)} on #${number}`);
