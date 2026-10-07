@@ -120,7 +120,7 @@ services:
 
   # Optional HTTPS front end (COMPOSE_PROFILES=https and DEMO_DOMAIN set). Gets a certificate automatically.
   caddy:
-    image: caddy:2.11.4-alpine
+    image: caddy:2.11.7-alpine
     profiles: ["https"]
     restart: unless-stopped
     depends_on:
