@@ -1,10 +1,15 @@
 name: Install Snippy agent
 
 # One-off. Installs the SnippyCode agent on the demo server.
-# The SSH user must be root, or able to sudo without a password
-# (the cloud-init deploy user is neither).
+# SSHs as root by default (the deploy user cannot sudo). Still uses DEMO_SSH_KEY.
+# Root must accept that key; cloud-init leaves PermitRootLogin off.
 on:
   workflow_dispatch:
+    inputs:
+      ssh_user:
+        description: SSH user on the demo server
+        default: root
+        required: false
 
 permissions:
   contents: read
@@ -21,7 +26,7 @@ jobs:
     environment: demo
     env:
       DEMO_HOST: ${{ secrets.DEMO_HOST }}
-      DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER || 'deploy' }}
+      DEMO_SSH_USER: ${{ inputs.ssh_user || 'root' }}
       DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
       DEMO_PATH: ${{ secrets.DEMO_PATH || '/opt/jellyglance-demo' }}
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
