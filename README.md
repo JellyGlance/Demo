@@ -6,7 +6,7 @@ A live, read-only [JellyGlance](https://github.com/Nerdy-Technician/JellyGlance)
 
 | Service | What it does |
 | --- | --- |
-| `jellyglance` | The stock JellyGlance image, configured entirely from environment variables. |
+| `jellyglance` | The stock JellyGlance image (`ghcr.io/jellyglance/server`), configured entirely from environment variables. |
 | `mock-services` | Stand-ins for the apps JellyGlance talks to, all built from one library (below). |
 | `seeder` | Writes about 3,500 plays covering the last year, connects the integrations, switches off scheduled backups, and rebuilds everything every 4 hours so the demo always looks current. |
 | `gateway` | The public front door. Signs visitors in automatically, adds a small "Live demo" badge, and refuses anything that would change data. |
@@ -117,7 +117,7 @@ Backups are switched off: the gateway blocks every backup route, and on each res
 | `DEMO_HISTORY_DAYS` | `365` | How much history to generate. |
 | `DEMO_MAX_SESSIONS` | `4` | Peak number of simulated viewers in the evening. |
 | `DEMO_SEED` | `jellyglance-demo` | Change it for a different set of users and history. |
-| `JELLYGLANCE_TAG` | `latest` | JellyGlance image tag to demo. |
+| `JELLYGLANCE_TAG` | `latest` | Tag of `ghcr.io/jellyglance/server` to demo. |
 | `DEMO_IMAGE_TAG` | `latest` | Demo image tag (set by the deploy workflow). |
 | `DEMO_SITE_URL` | `https://jellyglance.com` | Where the badge's "Get JellyGlance" link goes. |
 | `GATEWAY_BEHIND_PROXY` | `false` | Set to `true` behind Caddy, Traefik, Cloudflare or similar, so each visitor is rate-limited on their own address. |
