@@ -1,0 +1,120 @@
+name: Install Snippy agent
+
+# One-off. Installs the SnippyCode agent on the demo server.
+# The SSH user must be root, or able to sudo without a password
+# (the cloud-init deploy user is neither).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: install-snippy-agent
+  cancel-in-progress: false
+
+jobs:
+  install:
+    name: Install
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: demo
+    env:
+      DEMO_HOST: ${{ secrets.DEMO_HOST }}
+      DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER || 'deploy' }}
+      DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
+      DEMO_PATH: ${{ secrets.DEMO_PATH || '/opt/jellyglance-demo' }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+      SERVER_NAME: ${{ vars.DEMO_SERVER_NAME || 'jellyglance-demo' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # With a Hetzner token and no DEMO_HOST, look the server up by name.
+      - uses: ./.github/actions/hcloud
+        if: env.DEMO_HOST == '' && env.HCLOUD_TOKEN != ''
+
+      - name: Check settings
+        env:
+          SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+          SNIPPY_ENROLL_TOKEN: ${{ secrets.SNIPPY_ENROLL_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SSH_KEY" ]; then
+            echo "::error::Add the DEMO_SSH_KEY secret first."
+            exit 1
+          fi
+          if [ -z "$SNIPPY_ENROLL_TOKEN" ]; then
+            echo "::error::Add the SNIPPY_ENROLL_TOKEN secret first."
+            exit 1
+          fi
+          case "$SNIPPY_ENROLL_TOKEN" in
+            *[$'\n\r']*)
+              echo "::error::SNIPPY_ENROLL_TOKEN must be a single line."
+              exit 1
+              ;;
+          esac
+          printf '::add-mask::%s\n' "$SNIPPY_ENROLL_TOKEN"
+          if [ -z "$DEMO_HOST" ] && [ -n "$HCLOUD_TOKEN" ]; then
+            if DEMO_HOST=$(hcloud server ip "$SERVER_NAME" 2>/dev/null); then
+              echo "DEMO_HOST=$DEMO_HOST" >> "$GITHUB_ENV"
+            fi
+          fi
+          if [ -z "${DEMO_HOST:-}" ]; then
+            echo "::error::No DEMO_HOST and no Hetzner server to install on."
+            exit 1
+          fi
+
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEMO_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/demo
+          chmod 600 ~/.ssh/demo
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::DEMO_SSH_KNOWN_HOSTS is not set; trusting the server's key on first use."
+            ssh-keyscan -p "$DEMO_SSH_PORT" "$DEMO_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Install agent
+        env:
+          SNIPPY_ENROLL_TOKEN: ${{ secrets.SNIPPY_ENROLL_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '::add-mask::%s\n' "$SNIPPY_ENROLL_TOKEN"
+          # Confirm this is the demo host before enrolling it.
+          ssh -i "$HOME/.ssh/demo" -p "$DEMO_SSH_PORT" -o BatchMode=yes \
+            "$DEMO_SSH_USER@$DEMO_HOST" "test -d $(printf '%q' "$DEMO_PATH")"
+          # The enrol token is stdin only. It is not part of the ssh command.
+          # The shell installer is /agent/install.sh; the site root is the web app.
+          printf '%s' "$SNIPPY_ENROLL_TOKEN" | ssh -i "$HOME/.ssh/demo" -p "$DEMO_SSH_PORT" -o BatchMode=yes \
+            "$DEMO_SSH_USER@$DEMO_HOST" 'set -euo pipefail
+          token=$(cat)
+          tmp=$(mktemp)
+          cleanup() { rm -f "$tmp"; }
+          trap cleanup EXIT
+          curl -fsSL https://snippycode.bjr-home.uk/agent/install.sh -o "$tmp"
+          if [ "$(id -u)" -eq 0 ]; then
+            bash "$tmp" --url https://snippycode.bjr-home.uk --token "$token" --name jellyfindemo
+          else
+            sudo -n bash "$tmp" --url https://snippycode.bjr-home.uk --token "$token" --name jellyfindemo
+          fi'
+
+      - name: Check the agent is running
+        run: |
+          set -euo pipefail
+          ssh -i "$HOME/.ssh/demo" -p "$DEMO_SSH_PORT" -o BatchMode=yes -o LogLevel=ERROR \
+            "$DEMO_SSH_USER@$DEMO_HOST" 'set -euo pipefail
+          if [ "$(id -u)" -eq 0 ]; then
+            status=$(systemctl is-active snippycode-agent || true)
+          else
+            status=$(sudo -n systemctl is-active snippycode-agent || true)
+          fi
+          printf "%s\n%s\n" "$(hostname)" "$status"
+          test "$status" = active'
