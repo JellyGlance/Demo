@@ -51,7 +51,7 @@ services:
         aliases: [mock-jellyfin, sonarr, radarr, prowlarr, bazarr, jellyseerr, qbittorrent, sabnzbd]
 
   jellyglance:
-    image: ghcr.io/nerdy-technician/jellyglance:${JELLYGLANCE_TAG:-latest}
+    image: ghcr.io/jellyglance/server:${JELLYGLANCE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       db:

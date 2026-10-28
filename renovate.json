@@ -41,7 +41,7 @@
     {
       "description": "The demo's own image and JellyGlance itself are tagged by the deploy workflow, not pinned here.",
       "matchManagers": ["docker-compose"],
-      "matchPackageNames": ["ghcr.io/jellyglance/demo", "ghcr.io/nerdy-technician/jellyglance"],
+      "matchPackageNames": ["ghcr.io/jellyglance/demo", "ghcr.io/jellyglance/server"],
       "enabled": false
     },
     {
