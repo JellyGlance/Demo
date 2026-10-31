@@ -3,12 +3,11 @@
 //  - Sonarr, Radarr, Prowlarr, Bazarr, Jellyseerr, qBittorrent and SABnzbd on :80, picked by hostname
 // The library comes from TMDB when TMDB_API_KEY is set, otherwise from generated titles.
 import http from "node:http";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { buildDataset, generatedCatalog, publicItem, seederView, SERVER_ID, SERVER_NAME, hashId, rng, constants } from "./dataset.mjs";
 import { loadTmdbCatalog, IMAGE_BASE } from "./tmdb.mjs";
 import { createArrHandler } from "./arr.mjs";
 import { artwork } from "./png.mjs";
+import { cachedTmdbImage } from "./image-cache.mjs";
 
 const { TICKS } = constants;
 const JELLYFIN_PORT = Number(process.env.PORT || 8096);
@@ -50,20 +49,9 @@ function sendImage(res, buffer, type) {
   res.end(buffer);
 }
 
-// TMDB artwork is fetched once and kept on disk; anything without artwork gets a generated poster.
-async function tmdbImage(tmdbPath, size) {
-  const file = path.join(DATA_DIR, "images", size, tmdbPath.replace(/[^A-Za-z0-9._-]/g, ""));
-  try {
-    return await fs.readFile(file);
-  } catch {
-    const response = await fetch(`${IMAGE_BASE}/${size}${tmdbPath}`, { signal: AbortSignal.timeout(15_000) });
-    if (!response.ok) throw new Error(`image ${response.status}`);
-    const buffer = Buffer.from(await response.arrayBuffer());
-    await fs.mkdir(path.dirname(file), { recursive: true }).catch(() => {});
-    await fs.writeFile(file, buffer).catch(() => {});
-    return buffer;
-  }
-}
+// TMDB artwork is fetched once and kept on disk (validated, see image-cache.mjs);
+// anything without artwork gets a generated poster.
+const tmdbImage = (tmdbPath, size) => cachedTmdbImage({ dataDir: DATA_DIR, imageBase: IMAGE_BASE, size, tmdbPath });
 
 async function itemImage(res, itemId, kind, fillWidth) {
   const item = data.byId.get(itemId);
@@ -72,7 +60,8 @@ async function itemImage(res, itemId, kind, fillWidth) {
   if (tmdbPath) {
     try {
       const size = wide ? (fillWidth > 780 ? "w1280" : "w780") : fillWidth > 342 ? "w500" : "w342";
-      return sendImage(res, await tmdbImage(tmdbPath, size), "image/jpeg");
+      const image = await tmdbImage(tmdbPath, size);
+      return sendImage(res, image.buffer, image.type);
     } catch {
       // fall through to a generated image
     }
