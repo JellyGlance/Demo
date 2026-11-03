@@ -4,8 +4,10 @@
 // the TMDB image CDN), so nothing is written unless:
 //  - the size is one of the TMDB sizes we request,
 //  - the path is a single TMDB file name (no directories, no traversal),
-//  - the resolved cache file stays inside the cache directory,
-//  - the response is a real JPEG/PNG/WebP image under a size cap.
+//  - the response declares an allow-listed image Content-Type,
+//  - the body stays under a size cap and its magic bytes match the declared type.
+// Cache files are named by a SHA-256 of size + path; the network-supplied file name
+// is never used on disk. The extension comes only from the validated image type.
 // Files are written atomically (temp file + rename) so a half-written image is never served.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -13,6 +15,12 @@ import crypto from "node:crypto";
 
 export const IMAGE_SIZES = new Set(["w342", "w500", "w780", "w1280"]);
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+export const ALLOWED_CONTENT_TYPES = new Map([
+  ["image/jpeg", "jpg"],
+  ["image/png", "png"],
+  ["image/webp", "webp"],
+]);
+const EXT_TYPES = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp" };
 const TMDB_PATH = /^\/([A-Za-z0-9_-]{1,128})\.(jpg|jpeg|png|webp)$/;
 
 // Returns the bare file name for a TMDB image path such as "/abc123.jpg", or null.
@@ -21,12 +29,27 @@ export function safeImageName(tmdbPath) {
   return match ? `${match[1]}.${match[2].toLowerCase()}` : null;
 }
 
-// Resolves the cache file for a size and TMDB path, or null if either is not allowed.
-export function cacheFile(dataDir, size, tmdbPath) {
+// Expected MIME type for a validated TMDB path, from its allow-listed extension.
+export function expectedType(tmdbPath) {
   const name = safeImageName(tmdbPath);
-  if (!IMAGE_SIZES.has(size) || !name) return null;
+  return name ? EXT_TYPES[name.slice(name.lastIndexOf(".") + 1)] : null;
+}
+
+// Normalises a Content-Type header to a bare, allow-listed MIME type, or null.
+export function allowedContentType(header) {
+  if (typeof header !== "string") return null;
+  const type = header.split(";")[0].trim().toLowerCase();
+  return ALLOWED_CONTENT_TYPES.has(type) ? type : null;
+}
+
+// Resolves the cache file for a size and TMDB path, or null if either is not allowed.
+// The file name is sha256(size + NUL + path) plus an extension from the allow-list.
+export function cacheFile(dataDir, size, tmdbPath) {
+  const type = expectedType(tmdbPath);
+  if (!IMAGE_SIZES.has(size) || !type) return null;
+  const hash = crypto.createHash("sha256").update(`${size}\0${safeImageName(tmdbPath)}`).digest("hex");
   const root = path.resolve(dataDir, "images", size);
-  const file = path.resolve(root, name);
+  const file = path.join(root, `${hash}.${ALLOWED_CONTENT_TYPES.get(type)}`);
   return path.dirname(file) === root ? file : null;
 }
 
@@ -56,21 +79,27 @@ async function readLimited(response, limit) {
 // fetched from `${imageBase}/${size}${tmdbPath}` and cached after validation.
 export async function cachedTmdbImage({ dataDir, imageBase, size, tmdbPath, fetchImpl = fetch, timeoutMs = 15_000 }) {
   const file = cacheFile(dataDir, size, tmdbPath);
-  if (!file) throw new Error("invalid image path");
+  const name = safeImageName(tmdbPath);
+  const expected = expectedType(tmdbPath);
+  if (!file || !name || !expected) throw new Error("invalid image path");
 
   try {
     const cached = await fs.readFile(file);
     const type = imageType(cached);
-    if (type) return { buffer: cached, type };
+    if (type === expected) return { buffer: cached, type };
   } catch {
     // not cached yet
   }
 
-  const response = await fetchImpl(`${imageBase}/${size}/${path.basename(file)}`, { signal: AbortSignal.timeout(timeoutMs) });
+  const response = await fetchImpl(`${imageBase}/${size}/${encodeURIComponent(name)}`, { signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) throw new Error(`image ${response.status}`);
+  const declared = allowedContentType(response.headers.get("content-type"));
+  if (!declared) throw new Error("response is not an image");
+  if (declared !== expected) throw new Error("image type mismatch");
   const buffer = await readLimited(response, MAX_IMAGE_BYTES);
   const type = imageType(buffer);
   if (!type) throw new Error("response is not an image");
+  if (type !== declared) throw new Error("image type mismatch");
 
   try {
     await fs.mkdir(path.dirname(file), { recursive: true });
